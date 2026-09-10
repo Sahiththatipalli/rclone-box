@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+.tox/
+
+# Environment / secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+.aws/
+
+# Playwright / browser session state — contains admin cookies!
+storage_state.json
+storage_state.*.json
+playwright-report/
+test-results/
+.playwright/
+
+# Agent working files
+runs/
+*.jsonl.tmp
+report-*.md
+report-*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rclone-box-auditor"
+version = "0.1.0"
+description = "Claude agent that audits whether rclone is backing up all Box user folders to S3."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Ninepoint" }]
+dependencies = [
+    # Claude SDK — pinned to a 1.x tolerant range; tool_runner is beta and lives under client.beta.messages
+    "anthropic>=0.69,<1",
+    # Browser automation
+    "playwright>=1.47",
+    # AWS
+    "boto3>=1.34",
+    # CLI + config
+    "click>=8.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "moto[s3]>=5.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+rclone-box-auditor = "rclone_box_auditor.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+filterwarnings = [
+    "ignore::DeprecationWarning:botocore.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
