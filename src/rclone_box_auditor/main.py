@@ -46,7 +46,15 @@ def login() -> None:
 
 
 @cli.command()
-def run() -> None:
+@click.option(
+    "--depth",
+    type=click.Choice(["shallow", "medium", "deep"]),
+    default="medium",
+    show_default=True,
+    help="How aggressively to sample. shallow=quick pulse, medium=default, "
+    "deep=higher confidence for follow-up runs.",
+)
+def run(depth: str) -> None:
     """Run the Claude agent audit end-to-end."""
     missing = config.check(config.REQUIRED_FOR_RUN)
     if missing:
@@ -54,8 +62,8 @@ def run() -> None:
             f"Missing required env vars: {', '.join(missing)}. "
             "Copy .env.example to .env, or set AWS_SECRET_ID to load from Secrets Manager."
         )
-    run_paths = start_run()
-    click.echo(f"Run directory: {run_paths.run_dir}")
+    run_paths = start_run(depth=depth)
+    click.echo(f"Run directory: {run_paths.run_dir} (depth={depth})")
 
     # Import late so failing to import anthropic doesn't break `login`.
     from .agent import run_audit
@@ -73,14 +81,57 @@ def run() -> None:
 @click.argument("findings_file", type=click.Path(exists=True, path_type=Path))
 @click.option("--overview", default="Report re-rendered from existing findings.")
 def report(findings_file: Path, overview: str) -> None:
-    """Re-render report.md from an existing findings.jsonl (no LLM call)."""
-    from .tools.report import _load_findings, _render_markdown  # internal use OK
+    """Re-render report.md AND report.json from an existing findings.jsonl.
+
+    No LLM call. Uses the run_meta.json next to findings_file when present.
+    """
+    from datetime import datetime, timezone
+
+    from .tools.report import (
+        REPORT_SCHEMA_VERSION,
+        VALID_CATEGORIES,
+        VALID_SEVERITIES,
+        _load_findings,
+        _render_markdown,
+    )
 
     findings = _load_findings(findings_file)
-    md = _render_markdown(overview, findings)
-    out = findings_file.parent / "report.md"
-    out.write_text(md, encoding="utf-8")
-    click.echo(f"Wrote {out} ({len(findings)} findings).")
+
+    counts = {c: 0 for c in VALID_CATEGORIES}
+    severity_counts = {s: 0 for s in VALID_SEVERITIES}
+    for f in findings:
+        counts[f["category"]] = counts.get(f["category"], 0) + 1
+        severity_counts[f["severity"]] = severity_counts.get(f["severity"], 0) + 1
+
+    md_out = findings_file.parent / "report.md"
+    md_out.write_text(_render_markdown(overview, findings), encoding="utf-8")
+
+    meta_path = findings_file.parent / "run_meta.json"
+    run_meta = {}
+    if meta_path.exists():
+        try:
+            run_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+
+    bundle = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "run_id": run_meta.get("run_id"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_meta": run_meta,
+        "overview": overview,
+        "counts": counts,
+        "severity_counts": severity_counts,
+        "findings_total": len(findings),
+        "findings": findings,
+    }
+    json_out = findings_file.parent / "report.json"
+    json_out.write_text(
+        json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    click.echo(f"Wrote {md_out} and {json_out} ({len(findings)} findings).")
 
 
 @cli.command()

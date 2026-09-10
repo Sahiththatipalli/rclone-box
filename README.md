@@ -53,7 +53,17 @@ for how the agent, tools, and Claude API fit together.
 
 ## What the agent produces
 
-A Markdown report classifying every top-level Box user/folder into one of:
+For every run under `runs/<UTC-timestamp>/`:
+
+- `run_meta.json` — depth, timestamps, config fingerprint.
+- `findings.jsonl` — every structured finding, one JSON object per line.
+- `report.md` — human-readable summary.
+- `report.json` — same content as `report.md`, canonical shape for
+  CloudWatch Logs / Athena ingestion (`schema_version` field on every
+  bundle so you can migrate later).
+- `screenshots/` — evidence PNGs.
+
+Findings are classified into:
 
 - **covered** — present in Box, present in S3 with matching bytes/count within tolerance
 - **partial** — present in both but S3 count/size is materially lower
@@ -63,6 +73,16 @@ A Markdown report classifying every top-level Box user/folder into one of:
 Every finding cites its Box path and the S3 prefix it was compared to. A human has to look at
 the report before you act on any of it (see [`docs/BOX_ACCESS_GAP.md`](docs/BOX_ACCESS_GAP.md)
 for what remediation actually looks like).
+
+## Sampling depth
+
+Pass `--depth {shallow|medium|deep}` on `rclone-box-auditor run`:
+
+| Depth | Users drilled into | Recursion | When to use |
+| --- | --- | --- | --- |
+| `shallow` | ~5 | root only | Quick pulse check |
+| `medium` (default) | ~10 | +1 level | Everyday audit |
+| `deep` | ~20 | +2 levels | Follow-up when a prior run turned up worrying gaps |
 
 ## Guardrails
 

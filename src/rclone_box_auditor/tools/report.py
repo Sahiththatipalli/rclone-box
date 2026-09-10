@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+import platform
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,10 @@ log = logging.getLogger(__name__)
 
 VALID_CATEGORIES = {"covered", "partial", "gap", "inaccessible", "note"}
 VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
+VALID_DEPTHS = ("shallow", "medium", "deep")
+
+# Bump when the JSON report schema changes in a way consumers must handle.
+REPORT_SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -36,16 +41,29 @@ class RunPaths:
     run_dir: Path
     findings_path: Path
     report_path: Path
+    report_json_path: Path
+    meta_path: Path
 
 
 _active: RunPaths | None = None
 
 
-def start_run(base_dir: str | os.PathLike[str] | None = None) -> RunPaths:
-    """Initialize a new audit run. Idempotent within a process."""
+def start_run(
+    base_dir: str | os.PathLike[str] | None = None,
+    *,
+    depth: str = "medium",
+    extra_meta: dict[str, Any] | None = None,
+) -> RunPaths:
+    """Initialize a new audit run. Idempotent within a process.
+
+    Also writes ``run_meta.json`` with depth + timestamps + host info so a
+    downstream consumer (CloudWatch, Athena, human) knows the run's shape.
+    """
     global _active
     if _active is not None:
         return _active
+    if depth not in VALID_DEPTHS:
+        raise ValueError(f"depth must be one of {VALID_DEPTHS}, got {depth!r}")
     base = Path(base_dir or os.environ.get("AGENT_RUN_DIR", "./runs")).expanduser()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = base / stamp
@@ -54,11 +72,38 @@ def start_run(base_dir: str | os.PathLike[str] | None = None) -> RunPaths:
         run_dir=run_dir,
         findings_path=run_dir / "findings.jsonl",
         report_path=run_dir / "report.md",
+        report_json_path=run_dir / "report.json",
+        meta_path=run_dir / "run_meta.json",
     )
-    # Touch the findings file so downstream tooling can rely on it existing.
     _active.findings_path.touch(exist_ok=True)
-    log.info("audit run started at %s", run_dir)
+    meta = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "run_id": stamp,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "depth": depth,
+        "host": platform.node(),
+        "python": platform.python_version(),
+        "box_backup_bucket": os.environ.get("BOX_BACKUP_BUCKET"),
+        "box_backup_prefix": os.environ.get("BOX_BACKUP_PREFIX"),
+        "box_admin_url": os.environ.get("BOX_ADMIN_URL"),
+    }
+    if extra_meta:
+        # Caller-supplied metadata wins so overrides are explicit.
+        meta.update(extra_meta)
+    _active.meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    log.info("audit run started at %s (depth=%s)", run_dir, depth)
     return _active
+
+
+def load_meta() -> dict[str, Any]:
+    """Return the current run's metadata dict, or ``{}`` if not yet written."""
+    run = current_run()
+    if not run.meta_path.exists():
+        return {}
+    try:
+        return json.loads(run.meta_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def current_run() -> RunPaths:
@@ -144,29 +189,60 @@ def record_finding(
 
 @beta_tool
 def finalize_report(overview: str) -> dict[str, Any]:
-    """Render the accumulated findings as a Markdown report.
+    """Render the accumulated findings as a Markdown report and JSON export.
 
     Call this exactly once, at the end. The ``overview`` string becomes the
     executive summary at the top of the report — write it as if a manager will
     read only that paragraph.
 
+    Writes:
+
+    * ``report.md``   — human-readable audit report.
+    * ``report.json`` — canonical JSON bundle for CloudWatch / Athena
+      ingestion. Same overview + findings + counts, plus schema_version and
+      the run metadata (depth, timestamps, config fingerprint).
+
     Args:
         overview: 3-6 sentence executive summary of what the audit found overall.
 
     Returns:
-        ``{written: true, path, counts}`` where ``counts`` breaks down findings
-        by category.
+        ``{written: true, markdown_path, json_path, counts}``.
     """
     if not overview:
         return {"error": True, "message": "overview is required."}
     run = current_run()
     findings = _load_findings(run.findings_path)
-    md = _render_markdown(overview, findings)
-    run.report_path.write_text(md, encoding="utf-8")
     counts: dict[str, int] = {c: 0 for c in VALID_CATEGORIES}
+    severity_counts: dict[str, int] = {s: 0 for s in VALID_SEVERITIES}
     for f in findings:
         counts[f["category"]] = counts.get(f["category"], 0) + 1
-    return {"written": True, "path": str(run.report_path), "counts": counts}
+        severity_counts[f["severity"]] = severity_counts.get(f["severity"], 0) + 1
+
+    md = _render_markdown(overview, findings)
+    run.report_path.write_text(md, encoding="utf-8")
+
+    meta = load_meta()
+    bundle = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "run_id": meta.get("run_id"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_meta": meta,
+        "overview": overview,
+        "counts": counts,
+        "severity_counts": severity_counts,
+        "findings_total": len(findings),
+        "findings": findings,
+    }
+    run.report_json_path.write_text(
+        json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "written": True,
+        "markdown_path": str(run.report_path),
+        "json_path": str(run.report_json_path),
+        "counts": counts,
+    }
 
 
 # ---------------------------------------------------------------------------

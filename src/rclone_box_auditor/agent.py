@@ -21,7 +21,7 @@ import anthropic
 
 from .prompts import SYSTEM_PROMPT, initial_user_message
 from .tools.browser import BROWSER_TOOLS
-from .tools.report import REPORT_TOOLS, current_run
+from .tools.report import REPORT_TOOLS, current_run, load_meta
 from .tools.s3 import S3_TOOLS
 
 log = logging.getLogger(__name__)
@@ -43,11 +43,14 @@ def all_tools() -> list[Any]:
 def run_audit(client: anthropic.Anthropic | None = None) -> dict[str, Any]:
     """Run one audit end-to-end. Returns a small dict summarizing the run.
 
+    Depth is read from the run's ``run_meta.json`` (written by ``start_run``).
+
     Blocks until Claude decides it's done (calls ``finalize_report`` and stops).
     """
     client = client or anthropic.Anthropic()
     run = current_run()
     tools = all_tools()
+    depth = load_meta().get("depth", "medium")
 
     system = [
         {
@@ -58,7 +61,7 @@ def run_audit(client: anthropic.Anthropic | None = None) -> dict[str, Any]:
         }
     ]
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": initial_user_message(str(run.run_dir))},
+        {"role": "user", "content": initial_user_message(str(run.run_dir), depth=depth)},
     ]
 
     iterations = 0
@@ -112,7 +115,10 @@ def run_audit(client: anthropic.Anthropic | None = None) -> dict[str, Any]:
         "iterations": iterations,
         "pause_restarts": pause_restarts,
         "stop_reason": final_stop_reason,
+        "depth": depth,
         "run_dir": str(run.run_dir),
-        "report_path": str(run.report_path),
+        "report_md_path": str(run.report_path),
+        "report_json_path": str(run.report_json_path),
         "findings_path": str(run.findings_path),
+        "meta_path": str(run.meta_path),
     }

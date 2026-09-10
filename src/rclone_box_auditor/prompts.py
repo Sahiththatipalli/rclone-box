@@ -83,11 +83,44 @@ When you're done:
 """
 
 
-def initial_user_message(run_dir: str) -> str:
+DEPTH_GUIDANCE: dict[str, str] = {
+    "shallow": (
+        "Sample plan for this run: SHALLOW.\n"
+        "- Enumerate every user visible in the Admin Console (that's cheap — do it once).\n"
+        "- For 5 users, spread across the alphabet, verify only that the user's\n"
+        "  Content Manager root view is non-empty and that a matching top-level\n"
+        "  S3 prefix exists with non-zero content.\n"
+        "- Do NOT recurse into subfolders. This mode is for a quick pulse check."
+    ),
+    "medium": (
+        "Sample plan for this run: MEDIUM (default).\n"
+        "- Enumerate every user visible in the Admin Console.\n"
+        "- For 10 users, spread across the alphabet, list their top-level folders\n"
+        "  and compare counts + a couple of sampled file names against S3.\n"
+        "- Recurse ONE level for those 10 users: pick one visible folder per user,\n"
+        "  verify a matching S3 sub-prefix exists with plausible content."
+    ),
+    "deep": (
+        "Sample plan for this run: DEEP.\n"
+        "- Enumerate every user visible in the Admin Console.\n"
+        "- For 20 users, spread across the alphabet, list their top-level folders\n"
+        "  and compare counts + sampled file names against S3.\n"
+        "- Recurse TWO levels for those 20 users: for each, drill into one\n"
+        "  top-level folder AND one of its subfolders, verifying S3 counts +\n"
+        "  a sample at each level.\n"
+        "- Deep mode is for when a prior shallow/medium run turned up worrying\n"
+        "  discrepancies and you need higher confidence."
+    ),
+}
+
+
+def initial_user_message(run_dir: str, depth: str = "medium") -> str:
     """First user turn for the run. Kept short so it doesn't bloat the cache prefix."""
+    plan = DEPTH_GUIDANCE.get(depth, DEPTH_GUIDANCE["medium"])
     return (
-        "Please begin the audit. "
-        f"Findings and screenshots will be written under `{run_dir}`. "
+        "Please begin the audit.\n"
+        f"Findings, screenshots, and reports will be written under `{run_dir}`.\n"
         "Start by opening the Box Admin Console, enumerating the top-level "
-        "Content Manager view and the user list, then plan how you'll sample."
+        "Content Manager view and the user list, then follow the sample plan below.\n\n"
+        f"{plan}"
     )

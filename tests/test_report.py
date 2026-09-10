@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from rclone_box_auditor.tools.report import (
+    REPORT_SCHEMA_VERSION,
     finalize_report,
     record_finding,
+    start_run,
 )
 
 
@@ -90,7 +94,7 @@ def test_finalize_report_writes_markdown_with_sections(tmp_path, monkeypatch):
     )
     resp = _call(finalize_report, overview="Overview text goes here.")
     assert resp["written"] is True
-    md_path = resp["path"]
+    md_path = resp["markdown_path"]
     with open(md_path, encoding="utf-8") as f:
         content = f.read()
     assert "# Box → S3 backup audit" in content
@@ -105,3 +109,57 @@ def test_finalize_report_writes_markdown_with_sections(tmp_path, monkeypatch):
     assert resp["counts"]["gap"] == 1
     assert resp["counts"]["covered"] == 1
     assert resp["counts"]["note"] == 1
+
+
+def test_finalize_report_writes_json_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("BOX_BACKUP_BUCKET", "ninepoint-box-backup-prod")
+    monkeypatch.setenv("BOX_BACKUP_PREFIX", "box-backup")
+    _call(
+        record_finding,
+        category="gap",
+        box_path="Users/alice",
+        s3_prefix="Users/alice",
+        severity="critical",
+        summary="alice has no backup.",
+        evidence={"count_in_box": 12, "count_in_s3": 0},
+    )
+    _call(
+        record_finding,
+        category="covered",
+        box_path="Marketing",
+        s3_prefix="Marketing",
+        summary="Marketing matches.",
+    )
+    resp = _call(finalize_report, overview="Overview.")
+    assert "json_path" in resp
+    with open(resp["json_path"], encoding="utf-8") as f:
+        bundle = json.load(f)
+
+    # Schema shape a CloudWatch/Athena ingestor can depend on.
+    assert bundle["schema_version"] == REPORT_SCHEMA_VERSION
+    assert bundle["overview"] == "Overview."
+    assert bundle["findings_total"] == 2
+    assert bundle["counts"]["gap"] == 1
+    assert bundle["counts"]["covered"] == 1
+    assert bundle["severity_counts"]["critical"] == 1
+    assert bundle["run_meta"]["box_backup_bucket"] == "ninepoint-box-backup-prod"
+    # Every finding is included verbatim.
+    box_paths = {f["box_path"] for f in bundle["findings"]}
+    assert box_paths == {"Users/alice", "Marketing"}
+
+
+def test_start_run_writes_meta_and_records_depth(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_RUN_DIR", str(tmp_path))
+    run = start_run(depth="deep")
+    assert run.meta_path.exists()
+    meta = json.loads(run.meta_path.read_text(encoding="utf-8"))
+    assert meta["depth"] == "deep"
+    assert meta["schema_version"] == REPORT_SCHEMA_VERSION
+    assert meta["run_id"] == run.run_dir.name
+
+
+def test_start_run_rejects_invalid_depth(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_RUN_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="depth must be one of"):
+        start_run(depth="ludicrous")
